@@ -304,7 +304,7 @@ def run(
                     df = pd.concat([df, pd.DataFrame(row_dist, index=[0])])
 
             if type(flag) != int:
-                i_auroc, i_ap, p_auroc, p_ap, p_pro, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
+                i_auroc, i_ap, p_auroc, p_ap, p_pro, img_threshold, i_f1_max, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
                 result_collect.append(
                     {
                         "dataset_name": dataset_name,
@@ -313,6 +313,8 @@ def run(
                         "pixel_auroc": p_auroc,
                         "pixel_ap": p_ap,
                         "pixel_pro": p_pro,
+                        "image_f1_max": i_f1_max,
+                        "f1_max_threshold": img_threshold,
                         "best_epoch": epoch,
                     }
                 )

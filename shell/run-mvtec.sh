@@ -1,11 +1,11 @@
-datapath=/home/qjh/glass/GLASS-main/data/mvtec_anomaly_detection
-augpath=/home/qjh/glass/GLASS-main/data/dtd/images
-# classes=('carpet' 'grid' 'leather' 'tile' 'wood' 'bottle' 'cable' 'capsule' 'hazelnut' 'metal_nut' 'pill' 'screw' 'toothbrush' 'transistor' 'zipper')
-classes=('capsule')
+datapath=../data/mvtec_ad
+augpath=../data/dtd/images
+classes=('capsule' 'pill' 'screw')
 flags=($(for class in "${classes[@]}"; do echo '-d '"${class}"; done))
 
 cd ..
-python /home/qjh/glass/GLASS-main/main.py \
+python ../main.py \
+    --results_path /results \
     --gpu 0 \
     --seed 0 \
     --test ckpt \
@@ -33,6 +33,6 @@ python /home/qjh/glass/GLASS-main/main.py \
     --std 0.1 \
     --fg 1 \
     --rand_aug 1 \
-    --batch_size 8 \
+    --batch_size 16 \
     --resize 288 \
     --imagesize 288 "${flags[@]}" mvtec $datapath $augpath

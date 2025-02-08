@@ -18,3 +18,4 @@ torchvision==0.16.2
 tqdm==4.66.1
 imgaug
 openpyxl
+mlflow

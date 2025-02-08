@@ -17,9 +17,10 @@ def compute_best_pr_re(anomaly_ground_truth_labels, anomaly_prediction_weights):
     best_threshold = thresholds[np.argmax(f1_scores)]
     best_precision = precision[np.argmax(f1_scores)]
     best_recall = recall[np.argmax(f1_scores)]
-    print(best_threshold, best_precision, best_recall)
+    best_f1 = np.max(f1_scores)
+    # print(best_threshold, best_precision, best_recall, best_f1)
 
-    return best_threshold, best_precision, best_recall
+    return best_threshold, best_f1
 
 
 def compute_imagewise_retrieval_metrics(anomaly_prediction_weights, anomaly_ground_truth_labels, path='training'):

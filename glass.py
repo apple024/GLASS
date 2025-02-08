@@ -188,7 +188,7 @@ class GLASS(torch.nn.Module):
         return patch_features, patch_shapes
 
     def trainer(self, training_data, val_data, name):
-        mlflow_dir = "./working/mlruns"
+        mlflow_dir = os.path.join(os.getcwd(), "mlruns")
         if not os.path.exists(mlflow_dir):
             os.makedirs(mlflow_dir, exist_ok=True)
 
@@ -293,14 +293,13 @@ class GLASS(torch.nn.Module):
 
                 if (i_epoch + 1) % self.eval_epochs == 0:
                     images, scores, segmentations, labels_gt, masks_gt = self.predict(val_data)
-                    image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro = self._evaluate(images, scores, segmentations,
+                    image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
                                                                                             labels_gt, masks_gt, name)
 
                     mlflow.log_metric("img_auroc", image_auroc, step=i_epoch)
-                    mlflow.log_metric("img_ap", image_ap, step=i_epoch)
                     mlflow.log_metric("pixel_auroc", pixel_auroc, step=i_epoch)
-                    mlflow.log_metric("pixel_ap", pixel_ap, step=i_epoch)
-                    mlflow.log_metric("pixel_pro", pixel_pro, step=i_epoch)
+                    mlflow.log_metric("img_threshold", img_threshold, step=i_epoch)
+                    mlflow.log_metric("img_f1_max", img_f1_max, step=i_epoch)
 
                     # self.logger.logger.add_scalar("i-auroc", image_auroc, i_epoch)
                     # self.logger.logger.add_scalar("i-ap", image_ap, i_epoch)
@@ -311,14 +310,14 @@ class GLASS(torch.nn.Module):
                     eval_path = './results/eval/' + name + '/'
                     train_path = './results/training/' + name + '/'
                     if best_record is None:
-                        best_record = [image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, i_epoch]
+                        best_record = [image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_f1_max, i_epoch]
                         ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
                         torch.save(state_dict, ckpt_path_best)
                         shutil.rmtree(eval_path, ignore_errors=True)
                         shutil.copytree(train_path, eval_path)
 
                     elif image_auroc + pixel_auroc > best_record[0] + best_record[2]:
-                        best_record = [image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, i_epoch]
+                        best_record = [image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_f1_max, i_epoch]
                         os.remove(ckpt_path_best)
                         ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
                         torch.save(state_dict, ckpt_path_best)
@@ -326,10 +325,8 @@ class GLASS(torch.nn.Module):
                         shutil.copytree(train_path, eval_path)
 
                     pbar_str1 = f" IAUC:{round(image_auroc * 100, 2)}({round(best_record[0] * 100, 2)})" \
-                                f" IAP:{round(image_ap * 100, 2)}({round(best_record[1] * 100, 2)})" \
                                 f" PAUC:{round(pixel_auroc * 100, 2)}({round(best_record[2] * 100, 2)})" \
-                                f" PAP:{round(pixel_ap * 100, 2)}({round(best_record[3] * 100, 2)})" \
-                                f" PRO:{round(pixel_pro * 100, 2)}({round(best_record[4] * 100, 2)})" \
+                                f" IF1-max:{round(img_f1_max * 100, 2)}({round(best_record[5] * 100, 2)})" \
                                 f" E:{i_epoch}({best_record[-1]})"
                     pbar_str += pbar_str1
                     pbar.set_description_str(pbar_str)
@@ -477,7 +474,7 @@ class GLASS(torch.nn.Module):
             all_r_f_ = np.mean(all_r_f)
             sample_num = sample_num + img.shape[0]
 
-            pbar_str = f"epoch:{cur_epoch} loss:{all_loss_:.2e}"
+            pbar_str = f"epoch:{cur_epoch} discriminator loss:{all_loss_:.2e}"
             pbar_str += f" pt:{all_p_true_ * 100:.2f}"
             pbar_str += f" pf:{all_p_fake_ * 100:.2f}"
             pbar_str += f" rt:{all_r_t_:.2f}"
@@ -506,14 +503,14 @@ class GLASS(torch.nn.Module):
                 self.load_state_dict(state_dict, strict=False)
 
             images, scores, segmentations, labels_gt, masks_gt = self.predict(test_data)
-            image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro = self._evaluate(images, scores, segmentations,
+            image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
                                                                                      labels_gt, masks_gt, name, path='eval')
             epoch = int(ckpt_path[0].split('_')[-1].split('.')[0])
         else:
-            image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, epoch = 0., 0., 0., 0., 0., -1.
+            image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max, epoch = 0., 0., 0., 0., 0., 0., 0., -1.
             LOGGER.info("No ckpt file found!")
 
-        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, epoch
+        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max, epoch 
 
     def _evaluate(self, images, scores, segmentations, labels_gt, masks_gt, name, path='training'):
         scores = np.squeeze(np.array(scores))
@@ -524,6 +521,8 @@ class GLASS(torch.nn.Module):
         image_scores = metrics.compute_imagewise_retrieval_metrics(norm_scores, labels_gt, path)
         image_auroc = image_scores["auroc"]
         image_ap = image_scores["ap"]
+
+        img_threshold, img_f1_max = metrics.compute_best_pr_re(labels_gt, norm_scores)
 
         if len(masks_gt) > 0:
             segmentations = np.array(segmentations)
@@ -547,7 +546,7 @@ class GLASS(torch.nn.Module):
             pixel_auroc = -1.
             pixel_ap = -1.
             pixel_pro = -1.
-            return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro
+            return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro,img_threshold, img_f1_max
 
         defects = np.array(images)
         targets = np.array(masks_gt)
@@ -566,7 +565,7 @@ class GLASS(torch.nn.Module):
             utils.del_remake_dir(full_path, del_flag=False)
             cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
-        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro
+        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max
 
     def predict(self, test_dataloader):
         """This function provides anomaly scores/maps for full dataloaders."""
