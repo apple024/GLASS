@@ -1,10 +1,5 @@
 # GLASS
 
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/a-unified-anomaly-synthesis-strategy-with/anomaly-detection-on-mvtec-ad)](https://paperswithcode.com/sota/anomaly-detection-on-mvtec-ad?p=a-unified-anomaly-synthesis-strategy-with)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/a-unified-anomaly-synthesis-strategy-with/anomaly-detection-on-mpdd)](https://paperswithcode.com/sota/anomaly-detection-on-mpdd?p=a-unified-anomaly-synthesis-strategy-with)  
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/a-unified-anomaly-synthesis-strategy-with/anomaly-detection-on-wfdd)](https://paperswithcode.com/sota/anomaly-detection-on-wfdd?p=a-unified-anomaly-synthesis-strategy-with)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/a-unified-anomaly-synthesis-strategy-with/anomaly-detection-on-visa)](https://paperswithcode.com/sota/anomaly-detection-on-visa?p=a-unified-anomaly-synthesis-strategy-with)
-
 ![](figures/GLASS_schematic.png)
 
 **A Unified Anomaly Synthesis Strategy with Gradient Ascent for Industrial Anomaly Detection and Localization**
@@ -52,6 +47,7 @@ These dataset folders/files follow its original structure.
 - MVTec AD ([Download link](https://www.mvtec.com/company/research/datasets/mvtec-ad/))
 - VisA ([Download link](https://github.com/amazon-science/spot-diff/))
 - MPDD ([Download link](https://github.com/stepanje/MPDD/))
+- Foreground Mask ([Download link](https://drive.google.com/file/d/1Fn84QCfMtgBGEDcmY44v97Ci8wwpABK8/view?usp=sharing/))
 
 We also release the model weights of GLASS-j on MVTec AD reported in the paper.
 If you want to further explore based on these models,
@@ -61,7 +57,9 @@ and move it to the root directory of this repository.
 Note that you should clear the existing results folder before moving.
 
 ## Run Experiments
-Edit `./shell/run-dataset.sh` to configure arguments `--datapath`, `--augpath`, `--classes`, and hyperparameter settings.
+1. Experiment process and all necessary information seen in the file `run_glass.ipynb`.
+
+2. Edit `./shell/run-dataset.sh` to configure arguments `--datapath`, `--augpath`, `--classes`, and hyperparameter settings.
 Please modify argument `--test` to 'ckpt' / 'test' to toggle between training and testing modes.
 
 ```
@@ -84,26 +82,7 @@ Each category contains block-shape, point-like, and line-type defects with pixel
 
 ![](figures/WFDD_samples.png)
 
-### 2.MAD-man ([Download link](https://drive.google.com/file/d/1HJmw7hSmrS0NMxfAjDltF4cXlN5S96Iz/view?usp=sharing/))
-The MVTec AD-manual (MAD-man) test set is constructed to evaluate weak defect detection.
-It includes samples independently selected by 5 individuals from all 15 categories of MVTec AD.
-Each subset contains 2 normal and 6 anomaly samples per category.
-
-![](figures/MAD-man_samples.png)
-
-### 3.MAD-sys ([Download link](https://drive.google.com/file/d/1uLGWmOc4D9PuQawE-2nFS3p6XQzKrVsn/view?usp=sharing/))
-The MVTec AD-synthesis (MAD-sys) test set is constructed from 5 texture categories of MVTec AD.
-It includes 4 subsets with varying degrees of weak defects which are adjusted by the transparency coefficient.
-Each subset contains 320 normal and 946 anomaly samples.
-
-_"Note that due to weak defects under &beta;=0.9 which are very close to normal,
-we did not use the 5<sup>th</sup> subset in our study.
-However, we choose to release this subset,
-sincerely hoping that future work can further address this challenge."_
-
-![](figures/MAD-sys_samples.png)
-
-### 4.Foreground Mask ([Download link](https://drive.google.com/file/d/1Fn84QCfMtgBGEDcmY44v97Ci8wwpABK8/view?usp=sharing/))
+### 2.Foreground Mask ([Download link](https://drive.google.com/file/d/1Fn84QCfMtgBGEDcmY44v97Ci8wwpABK8/view?usp=sharing/))
 The foreground masks of normal samples from various datasets are obtained through binarization
 inspired by [BGAD](https://github.com/xcyao00/BGAD/).
 If a dataset does not have or require the foreground masks,
