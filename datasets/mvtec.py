@@ -9,6 +9,7 @@ import PIL
 import torch
 import os
 import glob
+import cv2
 
 _CLASSNAMES = [
     "carpet",
@@ -168,9 +169,10 @@ class MVTecDataset(torch.utils.data.Dataset):
         return transform_aug
 
     def __getitem__(self, idx):
-        classname, anomaly, image_path, mask_path = self.data_to_iterate[idx]
-        image = PIL.Image.open(image_path).convert("RGB")
-        image = self.transform_img(image)
+        # classname, anomaly, image_path, mask_path = self.data_to_iterate[idx]
+        classname, anomaly, image_path = self.data_to_iterate[idx]
+        image_rgb = PIL.Image.open(image_path).convert("RGB")
+        image = self.transform_img(image_rgb)
 
         mask_fg = mask_s = aug_image = torch.tensor([1])
         if self.split == DatasetSplit.TRAIN:
@@ -181,24 +183,45 @@ class MVTecDataset(torch.utils.data.Dataset):
             else:
                 aug = self.transform_img(aug)
 
+            # if self.class_fg:
+            #     fgmask_path = image_path.split(classname)[0] + 'fg_mask/' + classname + '/' + os.path.split(image_path)[-1]
+            #     mask_fg = PIL.Image.open(fgmask_path)
+            #     mask_fg = torch.ceil(self.transform_mask(mask_fg)[0])
+
             if self.class_fg:
-                fgmask_path = image_path.split(classname)[0] + 'fg_mask/' + classname + '/' + os.path.split(image_path)[-1]
-                mask_fg = PIL.Image.open(fgmask_path)
-                mask_fg = torch.ceil(self.transform_mask(mask_fg)[0])
+                fgmask_base_path = os.path.join(image_path.split(classname)[0], classname, 'fg_mask')
+                if not os.path.exists(fgmask_base_path):
+                    os.makedirs(fgmask_base_path, exist_ok=True)
+                    print('/fg_mask does not exist, already create it')
+
+                fgmask_path = os.path.join(fgmask_base_path, os.path.split(image_path)[-1])
+
+                if os.path.exists(fgmask_path):
+                    mask_fg = PIL.Image.open(fgmask_path)
+                    mask_fg = torch.ceil(self.transform_mask(mask_fg)[0])
+                else:
+                    image_np = np.array(image_rgb)
+                    target_foreground_mask = self.generate_target_foreground_mask(image_np)
+                    mask_img = PIL.Image.fromarray(target_foreground_mask)
+                    mask_img.save(fgmask_path)
+                    mask_fg = torch.ceil(self.transform_mask(mask_img)[0])
+                    print(f"already created foreground mask for {image_path} in {fgmask_path}")
 
             mask_all = perlin_mask(image.shape, self.imgsize // 8, 0, 6, mask_fg, 1)
-            mask_s = torch.from_numpy(mask_all[0])
-            mask_l = torch.from_numpy(mask_all[1])
+            mask_s = torch.from_numpy(mask_all[0]) # freature-level
+            mask_l = torch.from_numpy(mask_all[1]) # image-level
 
             beta = np.random.normal(loc=self.mean, scale=self.std)
             beta = np.clip(beta, .2, .8)
             aug_image = image * (1 - mask_l) + (1 - beta) * aug * mask_l + beta * image * mask_l
 
-        if self.split == DatasetSplit.TEST and mask_path is not None:
-            mask_gt = PIL.Image.open(mask_path).convert('L')
-            mask_gt = self.transform_mask(mask_gt)
-        else:
-            mask_gt = torch.zeros([1, *image.size()[1:]])
+        # if self.split == DatasetSplit.TEST and mask_path is not None:
+        #     mask_gt = PIL.Image.open(mask_path).convert('L')
+        #     mask_gt = self.transform_mask(mask_gt)
+        # else:
+        #     mask_gt = torch.zeros([1, *image.size()[1:]])
+
+        mask_gt = torch.zeros([1, *image.size()[1:]]) # ground_truth mask
 
         return {
             "image": image,
@@ -214,36 +237,51 @@ class MVTecDataset(torch.utils.data.Dataset):
 
     def get_image_data(self):
         imgpaths_per_class = {}
-        maskpaths_per_class = {}
+        # maskpaths_per_class = {}
 
         classpath = os.path.join(self.source, self.classname, self.split.value)
-        maskpath = os.path.join(self.source, self.classname, "ground_truth")
+        # maskpath = os.path.join(self.source, self.classname, "ground_truth")
         anomaly_types = os.listdir(classpath)
 
         imgpaths_per_class[self.classname] = {}
-        maskpaths_per_class[self.classname] = {}
+        # maskpaths_per_class[self.classname] = {}
 
         for anomaly in anomaly_types:
             anomaly_path = os.path.join(classpath, anomaly)
             anomaly_files = sorted(os.listdir(anomaly_path))
             imgpaths_per_class[self.classname][anomaly] = [os.path.join(anomaly_path, x) for x in anomaly_files]
 
-            if self.split == DatasetSplit.TEST and anomaly != "good":
-                anomaly_mask_path = os.path.join(maskpath, anomaly)
-                anomaly_mask_files = sorted(os.listdir(anomaly_mask_path))
-                maskpaths_per_class[self.classname][anomaly] = [os.path.join(anomaly_mask_path, x) for x in anomaly_mask_files]
-            else:
-                maskpaths_per_class[self.classname]["good"] = None
+            # if self.split == DatasetSplit.TEST and anomaly != "good":
+            #     anomaly_mask_path = os.path.join(maskpath, anomaly)
+            #     anomaly_mask_files = sorted(os.listdir(anomaly_mask_path))
+            #     maskpaths_per_class[self.classname][anomaly] = [os.path.join(anomaly_mask_path, x) for x in anomaly_mask_files]
+            # else:
+            #     maskpaths_per_class[self.classname]["good"] = None
 
         data_to_iterate = []
         for classname in sorted(imgpaths_per_class.keys()):
             for anomaly in sorted(imgpaths_per_class[classname].keys()):
                 for i, image_path in enumerate(imgpaths_per_class[classname][anomaly]):
                     data_tuple = [classname, anomaly, image_path]
-                    if self.split == DatasetSplit.TEST and anomaly != "good":
-                        data_tuple.append(maskpaths_per_class[classname][anomaly][i])
-                    else:
-                        data_tuple.append(None)
+                    # if self.split == DatasetSplit.TEST and anomaly != "good":
+                    #     data_tuple.append(maskpaths_per_class[classname][anomaly][i])
+                    # else:
+                    #     data_tuple.append(None)
                     data_to_iterate.append(data_tuple)
 
         return imgpaths_per_class, data_to_iterate
+
+
+    def generate_target_foreground_mask(self, img):
+        # convert RGB into GRAY scale
+        img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        
+        # generate binary mask of gray scale image
+        _, target_foreground_mask = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+        target_foreground_mask = target_foreground_mask.astype(np.uint8)
+        
+        return target_foreground_mask
+
+
+
