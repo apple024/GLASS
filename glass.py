@@ -3,6 +3,7 @@ from collections import OrderedDict
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 from model import Discriminator, Projection, PatchMaker
+from azureml.core import Workspace
 
 import numpy as np
 import pandas as pd
@@ -30,7 +31,8 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 class TBWrapper:
     def __init__(self, log_dir):
         self.g_iter = 0
-        self.logger = SummaryWriter(log_dir=log_dir)
+        # self.logger = SummaryWriter(log_dir=log_dir)
+        self.logger = None
 
     def step(self):
         self.g_iter += 1
@@ -125,6 +127,7 @@ class GLASS(torch.nn.Module):
         self.patch_maker = PatchMaker(patchsize, stride=patchstride)
         self.anomaly_segmentor = common.RescaleSegmentor(device=self.device, target_size=input_shape[-2:])
         self.model_dir = ""
+        self.result_dir = ""
         self.dataset_name = ""
         self.logger = None
 
@@ -136,6 +139,9 @@ class GLASS(torch.nn.Module):
         self.tb_dir = os.path.join(self.ckpt_dir, "tb")
         os.makedirs(self.tb_dir, exist_ok=True)
         self.logger = TBWrapper(self.tb_dir)
+
+    def set_result_dir(self, result_dir):
+        self.result_dir = result_dir
 
     def _embed(self, images, detach=True, provide_patch_shapes=False, evaluation=False):
         """Returns feature embeddings for images."""
@@ -190,12 +196,17 @@ class GLASS(torch.nn.Module):
         return patch_features, patch_shapes
 
     def trainer(self, training_data, val_data, name):
-        mlflow_dir = os.path.join(os.getcwd(), "mlruns")
-        if not os.path.exists(mlflow_dir):
-            os.makedirs(mlflow_dir, exist_ok=True)
+        workspace = Workspace.from_config()
+        mlflow_tracking_uri = workspace.get_mlflow_tracking_uri()
 
-        mlflow.set_tracking_uri(f"file://{mlflow_dir}")
-        mlflow.set_experiment("GLASS_Training")
+        # mlflow_dir = os.path.join(os.getcwd(), "mlruns")
+        # if not os.path.exists(mlflow_dir):
+        #     os.makedirs(mlflow_dir, exist_ok=True)
+        # mlflow.set_tracking_uri(f"file://{mlflow_dir}")
+
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment("GLASS-Training")
+        print("Tracking URI:", mlflow_tracking_uri)
 
         state_dict = {}
         ckpt_path = glob.glob(self.ckpt_dir + '/ckpt_best*')
@@ -254,8 +265,8 @@ class GLASS(torch.nn.Module):
 
             avg_img = utils.torch_format_2_numpy_img(self.c.detach().cpu().numpy())
             self.svd = utils.distribution_judge(avg_img, name)
-            os.makedirs(f'./results/judge/avg/{self.svd}', exist_ok=True)
-            cv2.imwrite(f'./results/judge/avg/{self.svd}/{name}.png', avg_img)
+            os.makedirs(os.path.join(self.result_dir, 'judge','avg', self.svd), exist_ok=True)
+            cv2.imwrite(os.path.join(self.result_dir, 'judge','avg', self.svd, f'{name}.png'), avg_img)
             return self.svd
 
         pbar_str1 = ""
@@ -269,6 +280,7 @@ class GLASS(torch.nn.Module):
             mlflow.log_param("meta_epochs", self.meta_epochs)
             mlflow.log_param("eval_epochs", self.eval_epochs)
             mlflow.log_param("lr", self.lr)
+            mlflow.log_param("dataset", name)
 
             pbar = tqdm.tqdm(range(self.meta_epochs), unit='epoch')
 
@@ -294,7 +306,7 @@ class GLASS(torch.nn.Module):
                     self.c /= len(training_data)
 
                 pbar_str, pt, pf, avg_loss = self._train_discriminator(training_data, i_epoch, pbar, pbar_str1)
-                mlflow.log_metric("loss", avg_loss, step=i_epoch)
+                mlflow.log_metric("discriminator_avg_loss", avg_loss, step=i_epoch)
 
                 update_state_dict()
 
@@ -307,8 +319,8 @@ class GLASS(torch.nn.Module):
                     mlflow.log_metric("img_threshold", img_threshold, step=i_epoch)
                     mlflow.log_metric("img_f1_max", img_f1_max, step=i_epoch)
 
-                    eval_path = './results/eval/' + name + '/'
-                    train_path = './results/training/' + name + '/'
+                    eval_path = os.path.join(self.result_dir, 'eval', name)
+                    train_path = os.path.join(self.result_dir, 'training', name)
                     if best_record is None:
                         best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
                         ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
@@ -345,6 +357,7 @@ class GLASS(torch.nn.Module):
                             break
 
                 torch.save(state_dict, ckpt_path_save)
+            mlflow.log_artifacts(self.result_dir, "results")
         return best_record
 
     def _train_discriminator(self, input_data, cur_epoch, pbar, pbar_str1):
@@ -464,12 +477,12 @@ class GLASS(torch.nn.Module):
             p_true = ((pix_true < self.dsc_margin).sum() - (pix_true == 0).sum()) / ((mask_s_gt == 0).sum() + true_scores.shape[0])
             p_fake = (pix_fake >= self.dsc_margin).sum() / ((mask_s_gt == 1).sum() + gaus_scores.shape[0])
 
-            self.logger.logger.add_scalar(f"p_true", p_true, self.logger.g_iter)
-            self.logger.logger.add_scalar(f"p_fake", p_fake, self.logger.g_iter)
-            self.logger.logger.add_scalar(f"r_t", r_t, self.logger.g_iter)
-            self.logger.logger.add_scalar(f"r_g", r_g, self.logger.g_iter)
-            self.logger.logger.add_scalar(f"r_f", r_f, self.logger.g_iter)
-            self.logger.logger.add_scalar("loss", loss, self.logger.g_iter)
+            mlflow.log_metric("discriminator_p_true", p_true, step=self.logger.g_iter)
+            mlflow.log_metric("discriminator_p_fake", p_fake, step=self.logger.g_iter)
+            mlflow.log_metric("discriminator_r_t", r_t, step=self.logger.g_iter)
+            mlflow.log_metric("discriminator_r_g", r_g, step=self.logger.g_iter)
+            mlflow.log_metric("discriminator_r_f", r_f, step=self.logger.g_iter)
+            mlflow.log_metric("discriminator_loss", loss, step=self.logger.g_iter)
             self.logger.step()
 
             all_loss.append(loss.detach().cpu().item())
@@ -558,7 +571,7 @@ class GLASS(torch.nn.Module):
             # img_up = cv2.resize(img_up, (256 * 3, 256))
             img_up = np.hstack([defect, mask])
             img_up = cv2.resize(img_up, (256 * 2, 256))
-            full_path = './results/' + path + '/' + name + '/'
+            full_path = os.path.join(self.result_dir, path, name)
             utils.del_remake_dir(full_path, del_flag=False)
             cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
@@ -677,7 +690,7 @@ class GLASS(torch.nn.Module):
 
             img_up = np.hstack([defect, target, mask])
             img_up = cv2.resize(img_up, (256 * 3, 256))
-            full_path = './results/' + path + '/' + name + '/'
+            full_path = os.path.join(self.result_dir, path, name)
             utils.del_remake_dir(full_path, del_flag=False)
             cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 

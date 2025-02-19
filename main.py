@@ -294,20 +294,21 @@ def run(
 
         models_dir = os.path.join(run_save_path, "models")
         os.makedirs(models_dir, exist_ok=True)
-        for i, GLASS in enumerate(glass_list):
+        for i, glass_runner in enumerate(glass_list):
             flag = 0., 0., 0., 0., 0., -1.
-            if GLASS.backbone.seed is not None:
-                utils.fix_seeds(GLASS.backbone.seed, device)
+            if glass_runner.backbone.seed is not None:
+                utils.fix_seeds(glass_runner.backbone.seed, device)
 
-            GLASS.set_model_dir(os.path.join(models_dir, f"backbone_{i}"), dataset_name)
+            glass_runner.set_model_dir(os.path.join(models_dir, f"backbone_{i}"), dataset_name)
+            glass_runner.set_result_dir(run_save_path)
             if test == 'ckpt':
-                flag = GLASS.trainer(dataloaders["training"], dataloaders["testing"], dataset_name)
+                flag = glass_runner.trainer(dataloaders["training"], dataloaders["testing"], dataset_name)
                 if type(flag) == int:
                     row_dist = {'Class': dataloaders["training"].name, 'Distribution': flag, 'Foreground': flag}
                     df = pd.concat([df, pd.DataFrame(row_dist, index=[0])])
 
             if type(flag) != int:
-                i_auroc, i_ap, img_threshold, i_f1_max, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
+                i_auroc, i_ap, img_threshold, i_f1_max, epoch = glass_runner.tester(dataloaders["testing"], dataset_name)
                 result_collect.append(
                     {
                         "dataset_name": dataset_name,
