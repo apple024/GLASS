@@ -265,8 +265,8 @@ class GLASS(torch.nn.Module):
 
             avg_img = utils.torch_format_2_numpy_img(self.c.detach().cpu().numpy())
             self.svd = utils.distribution_judge(avg_img, name)
-            os.makedirs(os.path.join(self.result_dir, 'judge','avg', self.svd), exist_ok=True)
-            cv2.imwrite(os.path.join(self.result_dir, 'judge','avg', self.svd, f'{name}.png'), avg_img)
+            os.makedirs(os.path.join(self.result_dir, 'judge','avg', str(self.svd)), exist_ok=True)
+            cv2.imwrite(os.path.join(self.result_dir, 'judge','avg', str(self.svd), f'{name}.png'), avg_img)
             return self.svd
 
         pbar_str1 = ""
