@@ -27,6 +27,8 @@ def main(**kwargs):
 
 
 @main.command("net")
+@click.option("--es_epoch", type=int, default=10, help="Early stopping epochs")
+@click.option("--tta", is_flag=True, default=False, help="If using the tta")
 @click.option("--dsc_margin", type=float, default=0.5)
 @click.option("--train_backbone", is_flag=True)
 @click.option("--backbone_names", "-b", type=str, multiple=True, default=[])
@@ -68,6 +70,8 @@ def net(
         svd,
         step,
         limit,
+        es_epoch,
+        tta,
 ):
     backbone_names = list(backbone_names)
     if len(backbone_names) > 1:
@@ -110,6 +114,8 @@ def net(
                 svd=svd,
                 step=step,
                 limit=limit,
+                es_epoch=es_epoch,
+                tta=tta,
             )
             glasses.append(glass_inst.to(device))
         return glasses
@@ -304,15 +310,12 @@ def run(
                     df = pd.concat([df, pd.DataFrame(row_dist, index=[0])])
 
             if type(flag) != int:
-                i_auroc, i_ap, p_auroc, p_ap, p_pro, img_threshold, i_f1_max, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
+                i_auroc, i_ap, img_threshold, i_f1_max, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
                 result_collect.append(
                     {
                         "dataset_name": dataset_name,
                         "image_auroc": i_auroc,
                         "image_ap": i_ap,
-                        "pixel_auroc": p_auroc,
-                        "pixel_ap": p_ap,
-                        "pixel_pro": p_pro,
                         "image_f1_max": i_f1_max,
                         "f1_max_threshold": img_threshold,
                         "best_epoch": epoch,
