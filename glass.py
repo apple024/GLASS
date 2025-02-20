@@ -67,6 +67,7 @@ class GLASS(torch.nn.Module):
             step=20,
             limit=392,
             es_epoch=10,
+            tta=False,
             **kwargs,
     ):
 
@@ -75,6 +76,7 @@ class GLASS(torch.nn.Module):
         self.input_shape = input_shape
         self.device = device
         self.es_epoch = es_epoch
+        self.tta = tta
 
         self.forward_modules = torch.nn.ModuleDict({})
         feature_aggregator = common.NetworkFeatureAggregator(
@@ -334,7 +336,7 @@ class GLASS(torch.nn.Module):
                     pbar.set_description_str(pbar_str)
 
                     # current_score = image_auroc*1 + pixel_auroc * 0
-                    current_score = image_auroc * 1 
+                    current_score = image_auroc*0.5 + img_f1_max*0.5
                     if current_score - best_score > 0.1:
                         best_score = current_score
                         epoch_counter = 0
@@ -515,9 +517,15 @@ class GLASS(torch.nn.Module):
             else:
                 self.load_state_dict(state_dict, strict=False)
 
-            images, scores, segmentations, labels_gt, masks_gt = self.predict(test_data)
-            image_auroc, image_ap, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
-                                                                                     labels_gt, masks_gt, name, path='eval')
+            if self.tta:
+                print("Execute tta")
+                images, scores, segmentations, labels_gt, masks_gt = self.tta_predict(test_data)
+                image_auroc, image_ap, img_threshold, img_f1_max = self.tta_evaluate(images, scores, segmentations,
+                                                                                        labels_gt, masks_gt, name, path='eval')
+            else:
+                images, scores, segmentations, labels_gt, masks_gt = self.predict(test_data)
+                image_auroc, image_ap, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
+                                                                                        labels_gt, masks_gt, name, path='eval')
             epoch = int(ckpt_path[0].split('_')[-1].split('.')[0])
         else:
             image_auroc, image_ap, img_threshold, img_f1_max, epoch = 0., 0., 0., 0., -1.
@@ -634,54 +642,64 @@ class GLASS(torch.nn.Module):
 
         if len(masks_gt) > 0:
             segmentations = np.array(segmentations)
-
-            target_height, target_width = images[0].shape[:2]
-
-            segmentations = segmentations.astype(np.float32)  
             min_scores = np.min(segmentations)
             max_scores = np.max(segmentations)
             norm_segmentations = (segmentations - min_scores) / (max_scores - min_scores + 1e-10)
+
+            # ============== DEBUG ==============
+            print("\n[DEBUG] Data shape validation:")
+            print("1. Original segmentation result dtype:", segmentations.dtype, "shape:", segmentations.shape)
+            print("2. Normalized dtype:", norm_segmentations.dtype, "range:", np.min(norm_segmentations), "-", np.max(norm_segmentations))
             
-            norm_segmentations = (norm_segmentations * 255).astype(np.uint8)
+            norm_segmentations = norm_segmentations.astype(np.float32)  # Fix 1：convert to float32
+            print("3. Converted dtype:", norm_segmentations.dtype)
 
-            pixel_scores = metrics.compute_pixelwise_retrieval_metrics(norm_segmentations, masks_gt, path)
-            pixel_auroc = pixel_scores["auroc"]
-            pixel_ap = pixel_scores["ap"]
-            if path == 'eval':
+            defects = np.array(images)
+            targets = np.array(masks_gt)
+            for i in range(len(defects)):
+                if i == 0:  # print debug info only for the first sample
+                    print("\n[DEBUG] Sample processing pipeline validation (i=0):")
+                
+                defect = utils.torch_format_2_numpy_img(defects[i])
+                target = utils.torch_format_2_numpy_img(targets[i])
+
+                # Maintain single channel during resizing
+                resized_mask = cv2.resize(
+                    norm_segmentations[i], 
+                    (defect.shape[1], defect.shape[0]),
+                    interpolation=cv2.INTER_LINEAR
+                )
+                if i == 0:
+                    print("4. Resized mask shape:", resized_mask.shape, "dtype:", resized_mask.dtype)
+                
+                # Convert to 0-255 and uint8
+                mask_8bit = (resized_mask * 255).astype(np.uint8)
+                if i == 0:
+                    print("5. Converted to uint8 range:", np.min(mask_8bit), "-", np.max(mask_8bit), "dtype:", mask_8bit.dtype)
+                
+                # Color sapce conversion
                 try:
-                    pixel_pro = metrics.compute_pro(np.squeeze(np.array(masks_gt)), norm_segmentations)
+                    mask_color = cv2.cvtColor(mask_8bit, cv2.COLOR_GRAY2BGR)
+                    if i == 0:
+                        print("6. Converted color shape:", mask_color.shape)
+                except Exception as e:
+                    print(f"\n[ERROR] Color conversion failed！")
+                    print("error mask_8bit parameters：", f"shape:{mask_8bit.shape}", f"dtype:{mask_8bit.dtype}")
+                    raise e
+                
+                # Apply color mapping
+                mask_color = cv2.applyColorMap(mask_color, cv2.COLORMAP_JET)
+                if i == 0:
+                    print("7. Applied color mapping shape:", mask_color.shape, "dtype:", mask_color.dtype)
 
-                except:
-                    pixel_pro = 0.
-            else:
-                pixel_pro = 0.
+                # Concatenate result images
+                img_up = np.hstack([defect, target, mask_color])
+                img_up = cv2.resize(img_up, (256 * 3, 256))
+                full_path = './results/' + path + '/' + name + '/'
+                utils.del_remake_dir(full_path, del_flag=False)
+                cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
-        else:
-            pixel_auroc = -1.
-            pixel_ap = -1.
-            pixel_pro = -1.
-            return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro,img_threshold, img_f1_max
-
-        defects = np.array(images)
-        targets = np.array(masks_gt)
-        for i in range(len(defects)):
-            defect = utils.torch_format_2_numpy_img(defects[i])
-            target = utils.torch_format_2_numpy_img(targets[i])
-
-            resized_mask = cv2.resize(norm_segmentations[i], (target_width, target_height), interpolation=cv2.INTER_LINEAR)
-            resized_mask = resized_mask.astype(np.uint8)  
-            mask = cv2.cvtColor(resized_mask, cv2.COLOR_GRAY2BGR)
-
-            mask = (mask * 255).astype('uint8')
-            mask = cv2.applyColorMap(mask, cv2.COLORMAP_JET)
-
-            img_up = np.hstack([defect, target, mask])
-            img_up = cv2.resize(img_up, (256 * 3, 256))
-            full_path = './results/' + path + '/' + name + '/'
-            utils.del_remake_dir(full_path, del_flag=False)
-            cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
-
-        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max
+        return image_auroc, image_ap, img_threshold, img_f1_max
 
     def tta_predict(self, test_dataloader):
         """This function provides anomaly scores/maps for full dataloaders."""
@@ -711,18 +729,32 @@ class GLASS(torch.nn.Module):
         return images, scores, masks, labels_gt, masks_gt
 
     def tta__predict(self, img):
-        """Infer score and mask for a batch of images with TTA (仅修改此函数)."""
+        """Infer score and mask for a batch of images with TTA"""
         self.forward_modules.eval()
         if self.pre_proj > 0:
             self.pre_projection.eval()
         self.discriminator.eval()
 
-        img = img.to(self.device) if not img.is_cuda else img
-
         tta_transforms = [
-            {'name': 'original', 'transform': lambda x: x, 'reverse': lambda x: x},
-            {'name': 'h_flip', 'transform': lambda x: x.flip(3), 'reverse': lambda x: x.flip(3)},
-            {'name': 'v_flip', 'transform': lambda x: x.flip(2), 'reverse': lambda x: x.flip(2)}
+            {'name': 'original', 
+            'transform': lambda x: x, 
+            'reverse': lambda x: x},
+
+            {'name': 'h_flip', 
+            'transform': lambda x: x.flip(-1), 
+            'reverse': lambda x: x.flip(-1)},
+
+            {'name': 'v_flip', 
+            'transform': lambda x: x.flip(-2), 
+            'reverse': lambda x: x.flip(-2)},
+
+            # {'name': 'rotate90', 
+            # 'transform': lambda x: x.rot90(1, [-2, -1]).flip(-1), 
+            # 'reverse': lambda x: x.flip(-1).rot90(-1, [-2, -1])},
+
+            # {'name': 'color_jitter', 
+            # 'transform': lambda x: x * (0.9 + 0.2*torch.rand(1,device=x.device)) + 0.1*torch.randn_like(x), 
+            # 'reverse': lambda x: x}, 
         ]
 
         all_scores = []
@@ -731,31 +763,15 @@ class GLASS(torch.nn.Module):
         with torch.no_grad():
             for aug in tta_transforms:
                 transformed_img = aug['transform'](img)
-                
-                patch_features, patch_shapes = self._embed(transformed_img, provide_patch_shapes=True, evaluation=True)
-                
-                if self.pre_proj > 0:
-                    patch_features = self.pre_projection(patch_features)
-                    patch_features = patch_features[0] if len(patch_features)==2 else patch_features
+                _scores, _masks = self._predict(transformed_img)
 
-                patch_scores = self.discriminator(patch_features)
-                
-                patch_scores_unpatched = self.patch_maker.unpatch_scores(patch_scores, batchsize=img.shape[0])
-                scales = patch_shapes[0]
-                
-                score_tensor = patch_scores_unpatched.reshape(img.shape[0], scales[0], scales[1])  
+                mask_tensor = torch.tensor(np.array(_masks)) 
+                reversed_masks = aug['reverse'](torch.tensor(_masks))
 
-                masks = self.anomaly_segmentor.convert_to_segmentation(score_tensor)  
-                if isinstance(masks, list):  
-                    masks = torch.stack([torch.from_numpy(m).to(self.device) for m in masks])
-                
-                reversed_masks = aug['reverse'](masks.unsqueeze(1)).squeeze(1)  
-                
-                image_scores = self.patch_maker.score(patch_scores_unpatched)
-                all_scores.append(image_scores)
-                all_masks.append(reversed_masks)
+                all_scores.append(_scores)
+                all_masks.append(reversed_masks.numpy())
 
-        avg_scores = torch.mean(torch.stack(all_scores), dim=0)
-        avg_masks = torch.mean(torch.stack(all_masks), dim=0)
+        avg_scores = np.mean(all_scores, axis=0)
+        avg_masks = np.mean(all_masks, axis=0)
 
-        return avg_scores.cpu().numpy().tolist(), avg_masks.cpu().numpy().tolist()
+        return avg_scores.tolist(), avg_masks.tolist()
