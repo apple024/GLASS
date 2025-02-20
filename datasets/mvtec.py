@@ -279,9 +279,12 @@ class MVTecDataset(torch.utils.data.Dataset):
         # generate binary mask of gray scale image
         _, target_foreground_mask = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
+        # TODO: test (start)
+        filter_size = 7
+        target_foreground_mask = cv2.bitwise_not(target_foreground_mask)
+        target_foreground_mask = cv2.medianBlur(target_foreground_mask, filter_size)
+        # TODO: test (end)
+
         target_foreground_mask = target_foreground_mask.astype(np.uint8)
         
         return target_foreground_mask
-
-
-

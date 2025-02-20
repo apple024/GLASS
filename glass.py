@@ -319,8 +319,8 @@ class GLASS(torch.nn.Module):
                     mlflow.log_metric("img_threshold", img_threshold, step=i_epoch)
                     mlflow.log_metric("img_f1_max", img_f1_max, step=i_epoch)
 
-                    eval_path = os.path.join(self.result_dir, 'eval', name)
-                    train_path = os.path.join(self.result_dir, 'training', name)
+                    eval_path = os.path.join(self.result_dir, 'eval', name) + '/'
+                    train_path = os.path.join(self.result_dir, 'training', name) + '/'
                     if best_record is None:
                         best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
                         ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
@@ -571,7 +571,7 @@ class GLASS(torch.nn.Module):
             # img_up = cv2.resize(img_up, (256 * 3, 256))
             img_up = np.hstack([defect, mask])
             img_up = cv2.resize(img_up, (256 * 2, 256))
-            full_path = os.path.join(self.result_dir, path, name)
+            full_path = os.path.join(self.result_dir, path, name) + '/'
             utils.del_remake_dir(full_path, del_flag=False)
             cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
@@ -690,7 +690,7 @@ class GLASS(torch.nn.Module):
 
             img_up = np.hstack([defect, target, mask])
             img_up = cv2.resize(img_up, (256 * 3, 256))
-            full_path = os.path.join(self.result_dir, path, name)
+            full_path = os.path.join(self.result_dir, path, name) + '/'
             utils.del_remake_dir(full_path, del_flag=False)
             cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
