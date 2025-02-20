@@ -192,7 +192,7 @@ class MVTecDataset(torch.utils.data.Dataset):
                 fgmask_base_path = os.path.join(image_path.split(classname)[0], classname, 'fg_mask')
                 if not os.path.exists(fgmask_base_path):
                     os.makedirs(fgmask_base_path, exist_ok=True)
-                    print('/fg_mask does not exist, already create it')
+                    print('/fg_mask does not exist, create it')
 
                 fgmask_path = os.path.join(fgmask_base_path, os.path.split(image_path)[-1])
 
@@ -205,7 +205,7 @@ class MVTecDataset(torch.utils.data.Dataset):
                     mask_img = PIL.Image.fromarray(target_foreground_mask)
                     mask_img.save(fgmask_path)
                     mask_fg = torch.ceil(self.transform_mask(mask_img)[0])
-                    print(f"already created foreground mask for {image_path} in {fgmask_path}")
+                    print(f"created foreground mask for {image_path} in {fgmask_path}")
 
             mask_all = perlin_mask(image.shape, self.imgsize // 8, 0, 6, mask_fg, 1)
             mask_s = torch.from_numpy(mask_all[0]) # freature-level
@@ -279,9 +279,12 @@ class MVTecDataset(torch.utils.data.Dataset):
         # generate binary mask of gray scale image
         _, target_foreground_mask = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
+        # TODO: test (start)
+        filter_size = 7
+        target_foreground_mask = cv2.bitwise_not(target_foreground_mask)
+        target_foreground_mask = cv2.medianBlur(target_foreground_mask, filter_size)
+        # TODO: test (end)
+
         target_foreground_mask = target_foreground_mask.astype(np.uint8)
         
         return target_foreground_mask
-
-
-
