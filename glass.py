@@ -200,13 +200,14 @@ class GLASS(torch.nn.Module):
     def trainer(self, training_data, val_data, name):
         workspace = Workspace.from_config()
         mlflow_tracking_uri = workspace.get_mlflow_tracking_uri()
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
 
         # mlflow_dir = os.path.join(os.getcwd(), "mlruns")
         # if not os.path.exists(mlflow_dir):
         #     os.makedirs(mlflow_dir, exist_ok=True)
-        # mlflow.set_tracking_uri(f"file://{mlflow_dir}")
+        # mlflow_tracking_uri = f"file://{mlflow_dir}"
+        # mlflow.set_tracking_uri(mlflow_tracking_uri)
 
-        mlflow.set_tracking_uri(mlflow_tracking_uri)
         mlflow.set_experiment("GLASS-Training")
         print("Tracking URI:", mlflow_tracking_uri)
 
@@ -531,7 +532,7 @@ class GLASS(torch.nn.Module):
                 self.load_state_dict(state_dict, strict=False)
 
             if self.tta:
-                print("Execute tta")
+                print("Conduct tta during inference")
                 images, scores, segmentations, labels_gt, masks_gt = self.tta_predict(test_data)
                 image_auroc, image_ap, img_threshold, img_f1_max = self.tta_evaluate(images, scores, segmentations,
                                                                                         labels_gt, masks_gt, name, path='eval')
@@ -659,19 +660,19 @@ class GLASS(torch.nn.Module):
             max_scores = np.max(segmentations)
             norm_segmentations = (segmentations - min_scores) / (max_scores - min_scores + 1e-10)
 
-            # ============== DEBUG ==============
-            print("\n[DEBUG] Data shape validation:")
-            print("1. Original segmentation result dtype:", segmentations.dtype, "shape:", segmentations.shape)
-            print("2. Normalized dtype:", norm_segmentations.dtype, "range:", np.min(norm_segmentations), "-", np.max(norm_segmentations))
+            # # ============== DEBUG ==============
+            # print("\n[DEBUG] Data shape validation:")
+            # print("1. Original segmentation result dtype:", segmentations.dtype, "shape:", segmentations.shape)
+            # print("2. Normalized dtype:", norm_segmentations.dtype, "range:", np.min(norm_segmentations), "-", np.max(norm_segmentations))
             
             norm_segmentations = norm_segmentations.astype(np.float32)  # Fix 1：convert to float32
-            print("3. Converted dtype:", norm_segmentations.dtype)
+            # print("3. Converted dtype:", norm_segmentations.dtype)
 
             defects = np.array(images)
             targets = np.array(masks_gt)
             for i in range(len(defects)):
-                if i == 0:  # print debug info only for the first sample
-                    print("\n[DEBUG] Sample processing pipeline validation (i=0):")
+                # if i == 0:  # print debug info only for the first sample
+                #     print("\n[DEBUG] Sample processing pipeline validation (i=0):")
                 
                 defect = utils.torch_format_2_numpy_img(defects[i])
                 target = utils.torch_format_2_numpy_img(targets[i])
@@ -682,19 +683,19 @@ class GLASS(torch.nn.Module):
                     (defect.shape[1], defect.shape[0]),
                     interpolation=cv2.INTER_LINEAR
                 )
-                if i == 0:
-                    print("4. Resized mask shape:", resized_mask.shape, "dtype:", resized_mask.dtype)
+                # if i == 0:
+                #     print("4. Resized mask shape:", resized_mask.shape, "dtype:", resized_mask.dtype)
                 
                 # Convert to 0-255 and uint8
                 mask_8bit = (resized_mask * 255).astype(np.uint8)
-                if i == 0:
-                    print("5. Converted to uint8 range:", np.min(mask_8bit), "-", np.max(mask_8bit), "dtype:", mask_8bit.dtype)
+                # if i == 0:
+                #     print("5. Converted to uint8 range:", np.min(mask_8bit), "-", np.max(mask_8bit), "dtype:", mask_8bit.dtype)
                 
                 # Color sapce conversion
                 try:
                     mask_color = cv2.cvtColor(mask_8bit, cv2.COLOR_GRAY2BGR)
-                    if i == 0:
-                        print("6. Converted color shape:", mask_color.shape)
+                    # if i == 0:
+                    #     print("6. Converted color shape:", mask_color.shape)
                 except Exception as e:
                     print(f"\n[ERROR] Color conversion failed！")
                     print("error mask_8bit parameters：", f"shape:{mask_8bit.shape}", f"dtype:{mask_8bit.dtype}")
@@ -702,13 +703,15 @@ class GLASS(torch.nn.Module):
                 
                 # Apply color mapping
                 mask_color = cv2.applyColorMap(mask_color, cv2.COLORMAP_JET)
-                if i == 0:
-                    print("7. Applied color mapping shape:", mask_color.shape, "dtype:", mask_color.dtype)
+                # if i == 0:
+                #     print("7. Applied color mapping shape:", mask_color.shape, "dtype:", mask_color.dtype)
 
                 # Concatenate result images
-                img_up = np.hstack([defect, target, mask_color])
-                img_up = cv2.resize(img_up, (256 * 3, 256))
-                full_path = './results/' + path + '/' + name + '/'
+                # img_up = np.hstack([defect, target, mask_color])
+                # img_up = cv2.resize(img_up, (256 * 3, 256))
+                img_up = np.hstack([defect, mask_color])
+                img_up = cv2.resize(img_up, (256 * 2, 256))
+                full_path = os.path.join(self.result_dir, path, name) + '/'
                 utils.del_remake_dir(full_path, del_flag=False)
                 cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
 
