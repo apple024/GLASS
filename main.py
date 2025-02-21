@@ -28,7 +28,7 @@ def main(**kwargs):
 
 @main.command("net")
 @click.option("--es_epoch", type=int, default=10, help="Early stopping epochs")
-@click.option("--tta", is_flag=True, default=False, help="If using the tta")
+@click.option("--tta", is_flag=True, default=False, help="Whether to use tta")
 @click.option("--dsc_margin", type=float, default=0.5)
 @click.option("--train_backbone", is_flag=True)
 @click.option("--backbone_names", "-b", type=str, multiple=True, default=[])
