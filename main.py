@@ -12,6 +12,8 @@ import glass
 import utils
 import mlflow
 
+from azureml.core import Workspace
+
 
 
 @click.group(chain=True)
@@ -27,13 +29,13 @@ def main(**kwargs):
 
 
 @main.command("net")
-@click.option("--es_epoch", type=int, default=10, help="Early stopping epochs")
+@click.option("--es_epoch", type=int, default=20, help="Early stopping epochs")
 @click.option("--dsc_margin", type=float, default=0.5)
 @click.option("--train_backbone", is_flag=True)
 @click.option("--backbone_names", "-b", type=str, multiple=True, default=[])
 @click.option("--layers_to_extract_from", "-le", type=str, multiple=True, default=[])
-@click.option("--pretrain_embed_dimension", type=int, default=1024)
-@click.option("--target_embed_dimension", type=int, default=1024)
+@click.option("--pretrain_embed_dimension", type=int, default=1536)
+@click.option("--target_embed_dimension", type=int, default=1536)
 @click.option("--patchsize", type=int, default=3)
 @click.option("--meta_epochs", type=int, default=640)
 @click.option("--eval_epochs", type=int, default=1)
@@ -115,6 +117,12 @@ def net(
                 es_epoch=es_epoch,
             )
             glasses.append(glass_inst.to(device))
+        if mlflow.active_run() is not None:
+            variables_to_log = ["backbone_name", "layers_to_extract_from", "device", "input_shape", "pretrain_embed_dimension", "target_embed_dimension", "patchsize", "meta_epochs", "eval_epochs", "dsc_layers", "dsc_hidden", "dsc_margin", "train_backbone", "pre_proj", "mining", "noise", "radius", "p", "lr", "svd", "step", "limit", "es_epoch"]
+            local_vars = locals()
+            mlflow.log_params({
+                key: local_vars[key] for key in variables_to_log
+            })
         return glasses
 
     return "get_glass", get_glass
@@ -175,6 +183,13 @@ def dataset(
     dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
 
     def get_dataloaders(seed, test, get_name=name):
+        if mlflow.active_run() is not None:
+            local_vars = locals()
+            variables_to_log = ["data_path", "aug_path", "batch_size", "resize", "imagesize", "num_workers", "rotate_degrees", "translate", "scale", "brightness", "contrast", "saturation", "gray", "hflip", "vflip", "distribution", "mean", "std", "fg", "rand_aug", "augment"]
+            mlflow.log_params({
+                key: local_vars[key] for key in variables_to_log
+            })
+
         dataloaders = []
         for subdataset in subdatasets:
             test_dataset = dataset_library.__dict__[dataset_info[1]](
@@ -264,6 +279,18 @@ def run(
         run_name,
         test,
 ):
+    if (test == 'ckpt'):
+        # we should start tracking this run with mlflow (otherwise it's evaluation only)
+        workspace = Workspace.from_config()
+        mlflow_tracking_uri = workspace.get_mlflow_tracking_uri()
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment("GLASS-Training")
+        LOGGER.info(f"Tracking MLFlow run at URI: {mlflow_tracking_uri}")
+        mlflow.start_run()
+
+        parent_run_name = mlflow.active_run().data.tags["mlflow.runName"]
+        results_path = results_path + "/" + parent_run_name
+
     methods = {key: item for (key, item) in methods}
 
     run_save_path = utils.create_storage_folder(
@@ -280,8 +307,15 @@ def run(
     for dataloader_count, dataloaders in enumerate(list_of_dataloaders):
         utils.fix_seeds(seed, device)
         dataset_name = dataloaders["training"].name
+
+        if mlflow.active_run() is not None:
+            mlflow.start_run(run_name=dataset_name, nested=True)
+
         imagesize = dataloaders["training"].dataset.imagesize
         glass_list = methods["get_glass"](imagesize, device)
+
+        if mlflow.active_run() is not None:
+            mlflow.log_param("dataset", dataset_name)
 
         LOGGER.info(
             "Selecting dataset [{}] ({}/{}) {}".format(
@@ -294,30 +328,30 @@ def run(
 
         models_dir = os.path.join(run_save_path, "models")
         os.makedirs(models_dir, exist_ok=True)
-        for i, GLASS in enumerate(glass_list):
+        for i, glass_runner in enumerate(glass_list):
             flag = 0., 0., 0., 0., 0., -1.
-            if GLASS.backbone.seed is not None:
-                utils.fix_seeds(GLASS.backbone.seed, device)
+            if glass_runner.backbone.seed is not None:
+                utils.fix_seeds(glass_runner.backbone.seed, device)
 
-            GLASS.set_model_dir(os.path.join(models_dir, f"backbone_{i}"), dataset_name)
+            glass_runner.set_model_dir(os.path.join(models_dir, f"backbone_{i}"), dataset_name)
+            glass_runner.set_result_dir(run_save_path)
             if test == 'ckpt':
-                flag = GLASS.trainer(dataloaders["training"], dataloaders["testing"], dataset_name)
+                flag = glass_runner.trainer(dataloaders["training"], dataloaders["testing"], dataset_name)
                 if type(flag) == int:
                     row_dist = {'Class': dataloaders["training"].name, 'Distribution': flag, 'Foreground': flag}
                     df = pd.concat([df, pd.DataFrame(row_dist, index=[0])])
 
             if type(flag) != int:
-                i_auroc, i_ap, img_threshold, i_f1_max, epoch = GLASS.tester(dataloaders["testing"], dataset_name)
-                result_collect.append(
-                    {
-                        "dataset_name": dataset_name,
-                        "image_auroc": i_auroc,
-                        "image_ap": i_ap,
-                        "image_f1_max": i_f1_max,
-                        "f1_max_threshold": img_threshold,
-                        "best_epoch": epoch,
-                    }
-                )
+                i_auroc, i_ap, img_threshold, i_f1_max, epoch = glass_runner.tester(dataloaders["testing"], dataset_name)
+                metrics = {
+                    "dataset_name": dataset_name,
+                    "image_auroc": i_auroc,
+                    "image_ap": i_ap,
+                    "image_f1_max": i_f1_max,
+                    "f1_max_threshold": img_threshold,
+                    "best_epoch": epoch,
+                }
+                result_collect.append(metrics)
 
                 if epoch > -1:
                     for key, item in result_collect[-1].items():
@@ -340,11 +374,18 @@ def run(
                     row_names=result_dataset_names,
                 )
 
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+
     # save distribution judgment xlsx after all categories
     if len(df['Class']) != 0:
         os.makedirs('./datasets/excel', exist_ok=True)
         xlsx_path = './datasets/excel/' + dataset_name.split('_')[0] + '_distribution.xlsx'
         df.to_excel(xlsx_path, index=False)
+
+    if mlflow.active_run() is not None:
+        mlflow.log_artifacts(run_save_path, "results")
+        mlflow.end_run()
 
 
 if __name__ == "__main__":
