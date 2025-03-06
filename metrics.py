@@ -12,13 +12,17 @@ def compute_best_pr_re(anomaly_ground_truth_labels, anomaly_prediction_weights):
     anomaly ground truth labels and anomaly prediction weights.
     """
     precision, recall, thresholds = metrics.precision_recall_curve(anomaly_ground_truth_labels, anomaly_prediction_weights)
-    f1_scores = 2 * (precision * recall) / (precision + recall)
 
-    best_threshold = thresholds[np.argmax(f1_scores)]
-    best_precision = precision[np.argmax(f1_scores)]
-    best_recall = recall[np.argmax(f1_scores)]
-    best_f1 = np.max(f1_scores)
-    # print(best_threshold, best_precision, best_recall, best_f1)
+    # avoid potential division by zero
+    f1_scores = np.zeros_like(precision)
+    valid_indices = (precision + recall) > 0
+    f1_scores[valid_indices] = 2 * (precision[valid_indices] * recall[valid_indices]) / (precision[valid_indices] + recall[valid_indices])
+
+    best_idx = np.argmax(f1_scores)
+    best_threshold = thresholds[best_idx]
+    best_precision = precision[best_idx]
+    best_recall = recall[best_idx]
+    best_f1 = f1_scores[best_idx]
 
     return best_threshold, best_f1
 
