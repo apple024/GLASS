@@ -198,19 +198,6 @@ class GLASS(torch.nn.Module):
         return patch_features, patch_shapes
 
     def trainer(self, training_data, val_data, name):
-        workspace = Workspace.from_config()
-        mlflow_tracking_uri = workspace.get_mlflow_tracking_uri()
-        mlflow.set_tracking_uri(mlflow_tracking_uri)
-
-        # mlflow_dir = os.path.join(os.getcwd(), "mlruns")
-        # if not os.path.exists(mlflow_dir):
-        #     os.makedirs(mlflow_dir, exist_ok=True)
-        # mlflow_tracking_uri = f"file://{mlflow_dir}"
-        # mlflow.set_tracking_uri(mlflow_tracking_uri)
-
-        mlflow.set_experiment("GLASS-Training")
-        print("Tracking URI:", mlflow_tracking_uri)
-
         state_dict = {}
         ckpt_path = glob.glob(self.ckpt_dir + '/ckpt_best*')
         ckpt_path_save = os.path.join(self.ckpt_dir, "ckpt.pth")
@@ -279,88 +266,84 @@ class GLASS(torch.nn.Module):
         epoch_counter = 0
         best_state = None
 
-        with mlflow.start_run():
-            mlflow.log_param("meta_epochs", self.meta_epochs)
-            mlflow.log_param("eval_epochs", self.eval_epochs)
-            mlflow.log_param("lr", self.lr)
-            mlflow.log_param("dataset", name)
+        pbar = tqdm.tqdm(range(self.meta_epochs), unit='epoch')
 
-            pbar = tqdm.tqdm(range(self.meta_epochs), unit='epoch')
-
-            for i_epoch in pbar:
-                self.forward_modules.eval()
-                with torch.no_grad():  # compute center
-                    for i, data in enumerate(training_data):
-                        img = data["image"]
-                        img = img.to(torch.float).to(self.device)
-                        if self.pre_proj > 0:
-                            outputs = self.pre_projection(self._embed(img, evaluation=False)[0])
-                            outputs = outputs[0] if len(outputs) == 2 else outputs
-                        else:
-                            outputs = self._embed(img, evaluation=False)[0]
+        for i_epoch in pbar:
+            self.forward_modules.eval()
+            with torch.no_grad():  # compute center
+                for i, data in enumerate(training_data):
+                    img = data["image"]
+                    img = img.to(torch.float).to(self.device)
+                    if self.pre_proj > 0:
+                        outputs = self.pre_projection(self._embed(img, evaluation=False)[0])
                         outputs = outputs[0] if len(outputs) == 2 else outputs
-                        outputs = outputs.reshape(img.shape[0], -1, outputs.shape[-1])
+                    else:
+                        outputs = self._embed(img, evaluation=False)[0]
+                    outputs = outputs[0] if len(outputs) == 2 else outputs
+                    outputs = outputs.reshape(img.shape[0], -1, outputs.shape[-1])
 
-                        batch_mean = torch.mean(outputs, dim=0)
-                        if i == 0:
-                            self.c = batch_mean
-                        else:
-                            self.c += batch_mean
-                    self.c /= len(training_data)
+                    batch_mean = torch.mean(outputs, dim=0)
+                    if i == 0:
+                        self.c = batch_mean
+                    else:
+                        self.c += batch_mean
+                self.c /= len(training_data)
 
-                pbar_str, pt, pf, avg_loss = self._train_discriminator(training_data, i_epoch, pbar, pbar_str1)
+            pbar_str, pt, pf, avg_loss = self._train_discriminator(training_data, i_epoch, pbar, pbar_str1)
+            if mlflow.active_run() is not None:
                 mlflow.log_metric("discriminator_avg_loss", avg_loss, step=i_epoch)
 
-                update_state_dict()
+            update_state_dict()
 
-                if (i_epoch + 1) % self.eval_epochs == 0:
-                    images, scores, segmentations, labels_gt, masks_gt = self.predict(val_data)
-                    image_auroc, image_ap, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
-                                                                                            labels_gt, masks_gt, name)
+            if (i_epoch + 1) % self.eval_epochs == 0:
+                images, scores, segmentations, labels_gt, masks_gt = self.predict(val_data)
+                image_auroc, image_ap, img_threshold, img_f1_max = self._evaluate(images, scores, segmentations,
+                                                                                        labels_gt, masks_gt, name)
 
+                if mlflow.active_run() is not None:
                     mlflow.log_metric("img_auroc", image_auroc, step=i_epoch)
                     mlflow.log_metric("img_threshold", img_threshold, step=i_epoch)
                     mlflow.log_metric("img_f1_max", img_f1_max, step=i_epoch)
 
-                    eval_path = os.path.join(self.result_dir, 'eval', name) + '/'
-                    train_path = os.path.join(self.result_dir, 'training', name) + '/'
-                    if best_record is None:
-                        best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
-                        ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
-                        torch.save(state_dict, ckpt_path_best)
-                        shutil.rmtree(eval_path, ignore_errors=True)
-                        shutil.copytree(train_path, eval_path)
+                eval_path = os.path.join(self.result_dir, 'eval', name) + '/'
+                train_path = os.path.join(self.result_dir, 'training', name) + '/'
+                if best_record is None:
+                    best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
+                    ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
+                    torch.save(state_dict, ckpt_path_best)
+                    shutil.rmtree(eval_path, ignore_errors=True)
+                    shutil.copytree(train_path, eval_path)
 
-                    # elif image_auroc + pixel_auroc > best_record[0] + best_record[2]:
-                    elif image_auroc > best_record[0]:
-                        best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
-                        os.remove(ckpt_path_best)
-                        ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
-                        torch.save(state_dict, ckpt_path_best)
-                        shutil.rmtree(eval_path, ignore_errors=True)
-                        shutil.copytree(train_path, eval_path)
+                # elif image_auroc + pixel_auroc > best_record[0] + best_record[2]:
+                elif img_f1_max > best_record[3]:
+                    best_record = [image_auroc, image_ap, img_f1_max, i_epoch]
+                    os.remove(ckpt_path_best)
+                    ckpt_path_best = os.path.join(self.ckpt_dir, "ckpt_best_{}.pth".format(i_epoch))
+                    torch.save(state_dict, ckpt_path_best)
+                    shutil.rmtree(eval_path, ignore_errors=True)
+                    shutil.copytree(train_path, eval_path)
 
-                    pbar_str1 = f" IAUC:{round(image_auroc * 100, 2)}({round(best_record[0] * 100, 2)})" \
-                                f" PAUC: Do not have PAUC)" \
-                                f" IF1-max:{round(img_f1_max * 100, 2)}({round(best_record[2] * 100, 2)})" \
-                                f" E:{i_epoch}({best_record[-1]})"
-                                
-                    pbar_str += pbar_str1
-                    pbar.set_description_str(pbar_str)
+                pbar_str1 = f" IAUC:{round(image_auroc * 100, 2)}({round(best_record[0] * 100, 2)})" \
+                            f" IF1-max:{round(img_f1_max * 100, 2)}({round(best_record[2] * 100, 2)})" \
+                            f" E:{i_epoch}({best_record[-1]})"
+                            
+                pbar_str += pbar_str1
+                pbar.set_description_str(pbar_str)
 
-                    # current_score = image_auroc*1 + pixel_auroc * 0
-                    current_score = image_auroc*0.5 + img_f1_max*0.5
-                    if current_score - best_score > 0.1:
-                        best_score = current_score
-                        epoch_counter = 0
-                    else:
-                        epoch_counter += 1
-                        if epoch_counter > self.es_epoch:
-                            LOGGER.info(f"Early stopping triggered at epoch {i_epoch}")
-                            break
+                # current_score = image_auroc*1 + pixel_auroc * 0
+                current_score = image_auroc * 0.1 + img_f1_max * 0.9
+                if mlflow.active_run() is not None:
+                    mlflow.log_metric("early_stop_score", current_score, step=i_epoch)
+                if current_score > best_score:
+                    best_score = current_score
+                    epoch_counter = 0
+                else:
+                    epoch_counter += 1
+                    if epoch_counter > self.es_epoch:
+                        LOGGER.info(f"Early stopping triggered at epoch {i_epoch}")
+                        break
 
-                torch.save(state_dict, ckpt_path_save)
-            mlflow.log_artifacts(self.result_dir, "results")
+            torch.save(state_dict, ckpt_path_save)
         return best_record
 
     def _train_discriminator(self, input_data, cur_epoch, pbar, pbar_str1):
@@ -480,12 +463,13 @@ class GLASS(torch.nn.Module):
             p_true = ((pix_true < self.dsc_margin).sum() - (pix_true == 0).sum()) / ((mask_s_gt == 0).sum() + true_scores.shape[0])
             p_fake = (pix_fake >= self.dsc_margin).sum() / ((mask_s_gt == 1).sum() + gaus_scores.shape[0])
 
-            mlflow.log_metric("discriminator_p_true", p_true, step=self.logger.g_iter)
-            mlflow.log_metric("discriminator_p_fake", p_fake, step=self.logger.g_iter)
-            mlflow.log_metric("discriminator_r_t", r_t, step=self.logger.g_iter)
-            mlflow.log_metric("discriminator_r_g", r_g, step=self.logger.g_iter)
-            mlflow.log_metric("discriminator_r_f", r_f, step=self.logger.g_iter)
-            mlflow.log_metric("discriminator_loss", loss, step=self.logger.g_iter)
+            if mlflow.active_run() is not None:
+                mlflow.log_metric("discriminator_p_true", p_true, step=self.logger.g_iter)
+                mlflow.log_metric("discriminator_p_fake", p_fake, step=self.logger.g_iter)
+                mlflow.log_metric("discriminator_r_t", r_t, step=self.logger.g_iter)
+                mlflow.log_metric("discriminator_r_g", r_g, step=self.logger.g_iter)
+                mlflow.log_metric("discriminator_r_f", r_f, step=self.logger.g_iter)
+                mlflow.log_metric("discriminator_loss", loss, step=self.logger.g_iter)
             self.logger.step()
 
             all_loss.append(loss.detach().cpu().item())
@@ -582,7 +566,7 @@ class GLASS(torch.nn.Module):
             img_up = cv2.resize(img_up, (256 * 2, 256))
             full_path = os.path.join(self.result_dir, path, name) + '/'
             utils.del_remake_dir(full_path, del_flag=False)
-            cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
+            cv2.imwrite(full_path + str(i + 1).zfill(3) + f"_{labels_gt[i]}" + '.png', img_up)
 
         return image_auroc, image_ap, img_threshold, img_f1_max
 
@@ -713,9 +697,33 @@ class GLASS(torch.nn.Module):
                 img_up = cv2.resize(img_up, (256 * 2, 256))
                 full_path = os.path.join(self.result_dir, path, name) + '/'
                 utils.del_remake_dir(full_path, del_flag=False)
-                cv2.imwrite(full_path + str(i + 1).zfill(3) + '.png', img_up)
+                cv2.imwrite(full_path + str(i + 1).zfill(3) + f"_{labels_gt[i]}" + '.png', img_up)
+        else:
+            pixel_auroc = -1.
+            pixel_ap = -1.
+            pixel_pro = -1.
+            return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro,img_threshold, img_f1_max
 
-        return image_auroc, image_ap, img_threshold, img_f1_max
+        defects = np.array(images)
+        targets = np.array(masks_gt)
+        for i in range(len(defects)):
+            defect = utils.torch_format_2_numpy_img(defects[i])
+            target = utils.torch_format_2_numpy_img(targets[i])
+
+            resized_mask = cv2.resize(norm_segmentations[i], (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+            resized_mask = resized_mask.astype(np.uint8)  
+            mask = cv2.cvtColor(resized_mask, cv2.COLOR_GRAY2BGR)
+
+            mask = (mask * 255).astype('uint8')
+            mask = cv2.applyColorMap(mask, cv2.COLORMAP_JET)
+
+            img_up = np.hstack([defect, target, mask])
+            img_up = cv2.resize(img_up, (256 * 3, 256))
+            full_path = os.path.join(self.result_dir, path, name) + '/'
+            utils.del_remake_dir(full_path, del_flag=False)
+            cv2.imwrite(full_path + str(i + 1).zfill(3) + f"_{labels_gt[i]}" + '.png', img_up)
+
+        return image_auroc, image_ap, pixel_auroc, pixel_ap, pixel_pro, img_threshold, img_f1_max
 
     def tta_predict(self, test_dataloader):
         """This function provides anomaly scores/maps for full dataloaders."""

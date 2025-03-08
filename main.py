@@ -12,6 +12,10 @@ import glass
 import utils
 import mlflow
 
+from azureml.core import Workspace
+
+
+DATASET_PARAMS = {}
 
 
 @click.group(chain=True)
@@ -27,7 +31,7 @@ def main(**kwargs):
 
 
 @main.command("net")
-@click.option("--es_epoch", type=int, default=10, help="Early stopping epochs")
+@click.option("--es_epoch", type=int, default=20, help="Early stopping epochs")
 @click.option("--tta", is_flag=True, default=False, help="Whether to use tta")
 @click.option("--dsc_margin", type=float, default=0.5)
 @click.option("--train_backbone", is_flag=True)
@@ -118,6 +122,12 @@ def net(
                 tta=tta,
             )
             glasses.append(glass_inst.to(device))
+        if mlflow.active_run() is not None:
+            variables_to_log = ["backbone_name", "layers_to_extract_from", "device", "input_shape", "pretrain_embed_dimension", "target_embed_dimension", "patchsize", "meta_epochs", "eval_epochs", "dsc_layers", "dsc_hidden", "dsc_margin", "train_backbone", "pre_proj", "mining", "noise", "radius", "p", "lr", "svd", "step", "limit", "es_epoch", "tta"]
+            local_vars = locals()
+            mlflow.log_params({
+                key: local_vars[key] for key in variables_to_log
+            })
         return glasses
 
     return "get_glass", get_glass
@@ -178,6 +188,13 @@ def dataset(
     dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
 
     def get_dataloaders(seed, test, get_name=name):
+        local_vars = locals()
+        variables_to_log = ["data_path", "aug_path", "batch_size", "resize", "imagesize", "num_workers", "rotate_degrees", "translate", "scale", "brightness", "contrast", "saturation", "gray", "hflip", "vflip", "distribution", "mean", "std", "fg", "rand_aug", "augment"]
+        for key in variables_to_log:
+            DATASET_PARAMS[key] = local_vars[key]
+        if mlflow.active_run() is not None:
+            mlflow.log_params(DATASET_PARAMS)
+
         dataloaders = []
         for subdataset in subdatasets:
             test_dataset = dataset_library.__dict__[dataset_info[1]](
@@ -267,6 +284,18 @@ def run(
         run_name,
         test,
 ):
+    if (test == 'ckpt'):
+        # we should start tracking this run with mlflow (otherwise it's evaluation only)
+        workspace = Workspace.from_config()
+        mlflow_tracking_uri = workspace.get_mlflow_tracking_uri()
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment("GLASS-Training")
+        LOGGER.info(f"Tracking MLFlow run at URI: {mlflow_tracking_uri}")
+        mlflow.start_run()
+
+        parent_run_name = mlflow.active_run().data.tags["mlflow.runName"]
+        results_path = results_path + "/" + parent_run_name
+
     methods = {key: item for (key, item) in methods}
 
     run_save_path = utils.create_storage_folder(
@@ -283,8 +312,16 @@ def run(
     for dataloader_count, dataloaders in enumerate(list_of_dataloaders):
         utils.fix_seeds(seed, device)
         dataset_name = dataloaders["training"].name
+
+        if mlflow.active_run() is not None:
+            mlflow.start_run(run_name=dataset_name, nested=True)
+            mlflow.log_params(DATASET_PARAMS)
+
         imagesize = dataloaders["training"].dataset.imagesize
         glass_list = methods["get_glass"](imagesize, device)
+
+        if mlflow.active_run() is not None:
+            mlflow.log_param("dataset", dataset_name)
 
         LOGGER.info(
             "Selecting dataset [{}] ({}/{}) {}".format(
@@ -344,11 +381,18 @@ def run(
                     row_names=result_dataset_names,
                 )
 
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+
     # save distribution judgment xlsx after all categories
     if len(df['Class']) != 0:
         os.makedirs('./datasets/excel', exist_ok=True)
         xlsx_path = './datasets/excel/' + dataset_name.split('_')[0] + '_distribution.xlsx'
         df.to_excel(xlsx_path, index=False)
+
+    if mlflow.active_run() is not None:
+        mlflow.log_artifacts(run_save_path, "results")
+        mlflow.end_run()
 
 
 if __name__ == "__main__":

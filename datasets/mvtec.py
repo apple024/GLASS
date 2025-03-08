@@ -194,7 +194,8 @@ class MVTecDataset(torch.utils.data.Dataset):
                     os.makedirs(fgmask_base_path, exist_ok=True)
                     print('/fg_mask does not exist, create it')
 
-                fgmask_path = os.path.join(fgmask_base_path, os.path.split(image_path)[-1])
+                image_base_name, _ = os.path.splitext(os.path.split(image_path)[-1])
+                fgmask_path = os.path.join(fgmask_base_path, f"{image_base_name}.png")
 
                 if os.path.exists(fgmask_path):
                     mask_fg = PIL.Image.open(fgmask_path)
